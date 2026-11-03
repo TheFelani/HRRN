@@ -1,0 +1,64 @@
+import threading
+import time
+
+class HRRNMonitor:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.condition = threading.Condition(self.lock)
+        self.ready_queue = []
+        self.current_time = 0
+        self.completed_count = 0
+
+    def add_process(self, p):
+        with self.lock:
+            self.ready_queue.append(p)
+            self.condition.notify_all()
+
+    def run_scheduler(self, total_processes):
+        while True:
+            with self.lock:
+                while not self.ready_queue:
+                    self.condition.wait()
+
+                # فرآیندهای رسیده
+                available = [p for p in self.ready_queue if p.arrival_time <= self.current_time and not p.completed]
+                
+                if not available:
+                    self.current_time += 1
+                    continue
+
+                if self.completed_count >= total_processes:
+                    break
+
+                # محاسبه بالاترین نسبت پاسخ (HRRN)
+                best_process = max(
+                    available, 
+                    key=lambda p: ((self.current_time - p.arrival_time + p.burst_time) / p.burst_time)
+                )
+
+                best_process.waiting_time = self.current_time - best_process.arrival_time
+                max_ratio = (best_process.waiting_time + best_process.burst_time) / best_process.burst_time
+
+                print(f"[Monitor] Time {self.current_time}: Running Process {best_process.pid} (Ratio: {max_ratio:.2f})")
+                
+                # شبیه‌سازی اجرا
+                self.current_time += best_process.burst_time
+                best_process.completed = True
+                self.completed_count += 1
+                
+                print(f"--> Process {best_process.pid} completed.")
+                
+                if self.completed_count >= total_processes:
+                    break
+
+# تست مانیتور
+if __name__ == "__main__":
+    monitor = HRRNMonitor()
+    procs = [Process("P1", 0, 3), Process("P2", 2, 6), Process("P3", 4, 4)]
+    
+    for p in procs:
+        monitor.add_process(p)
+
+    t = threading.Thread(target=monitor.run_scheduler, args=(len(procs),))
+    t.start()
+    t.join()
