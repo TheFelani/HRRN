@@ -1,0 +1,64 @@
+import threading
+import time
+
+class HybridHRRNScheduler:
+    def __init__(self):
+        # مانیتور برای مدیریت صف و زمان‌بندی
+        self.monitor_lock = threading.Lock()
+        self.monitor_cond = threading.Condition(self.monitor_lock)
+        self.ready_queue = []
+        self.current_time = 0
+        
+        # سمافور برای کنترل دسترسی همزمان به پردازنده (مثلا تعداد هسته‌های CPU)
+        self.cpu_semaphore = threading.Semaphore(1)
+
+    def submit_process(self, p):
+        with self.monitor_cond:
+            self.ready_queue.append(p)
+            self.monitor_cond.notify()
+
+    def cpu_worker(self, total_jobs):
+        completed = 0
+        while completed < total_jobs:
+            with self.monitor_cond:
+                # انتظار تا رسیدن فرآیند معتبر
+                available = [p for p in self.ready_queue if p.arrival_time <= self.current_time and not p.completed]
+                while not available and completed < total_jobs:
+                    self.monitor_cond.wait()
+                    available = [p for p in self.ready_queue if p.arrival_time <= self.current_time and not p.completed]
+                
+                if completed >= total_jobs:
+                    break
+
+                # انتخاب بر اساس HRRN
+                best_p = max(
+                    available,
+                    key=lambda x: ((self.current_time - x.arrival_time + x.burst_time) / x.burst_time)
+                )
+                best_p.waiting_time = self.current_time - best_p.arrival_time
+                ratio = (best_p.waiting_time + best_p.burst_time) / best_p.burst_time
+                
+                # قفل کردن CPU با سمافور برای اجرای فیزیکی
+                self.cpu_semaphore.acquire()
+                print(f"[Hybrid] Time {self.current_time}: CPU executing Process {best_p.pid} [Ratio: {ratio:.2f}]")
+                
+                # آزاد کردن قفل مانیتور در حین اجرای فرآیند تا دیگران بتوانند فرآیند اضافه کنند
+                self.current_time += best_p.burst_time
+                best_p.completed = True
+                completed += 1
+                
+                time.sleep(0.1)
+                print(f"--> Process {best_p.pid} finished execution.")
+                self.cpu_semaphore.release()
+
+# تست مدل ترکیبی
+if __name__ == "__main__":
+    scheduler = HybridHRRNScheduler()
+    jobs = [Process("A", 0, 5), Process("B", 1, 2), Process("C", 3, 4)]
+    
+    for j in jobs:
+        scheduler.submit_process(j)
+
+    worker_thread = threading.Thread(target=scheduler.cpu_worker, args=(len(jobs),))
+    worker_thread.start()
+    worker_thread.join()
